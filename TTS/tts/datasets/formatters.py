@@ -594,6 +594,36 @@ def emotion(root_path, meta_file, ignored_speakers=None):
     return items
 
 
+def custom_turkish_formatter_emotion(root_path, meta_file, ignored_speakers=None):
+    """Custom Turkish formatter with emotion support for XTTS"""
+    txt_file = os.path.join(root_path, meta_file)
+    items = []
+    with open(txt_file, "r", encoding="utf-8") as ttf:
+        for line in ttf:
+            if line.strip():
+                parts = line.strip().split("|")
+                if len(parts) >= 3:
+                    wav_file = parts[0]
+                    text = parts[1]
+                    speaker_id = parts[2]
+                    emotion = parts[3] if len(parts) > 3 else "neutral"
+                    
+                    # ignore speakers
+                    if isinstance(ignored_speakers, list):
+                        if speaker_id in ignored_speakers:
+                            continue
+                    
+                    items.append({
+                        "audio_file": wav_file,
+                        "text": text,
+                        "speaker_name": speaker_id,
+                        "language": "tr",
+                        "emotion": emotion,
+                        "root_path": root_path
+                    })
+    return items
+
+
 def baker(root_path: str, meta_file: str, **kwargs) -> List[List[str]]:  # pylint: disable=unused-argument
     """Normalizes the Baker meta data file to TTS format
 
