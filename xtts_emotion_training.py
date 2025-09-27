@@ -25,12 +25,13 @@ DASHBOARD_LOGGER = "tensorboard"
 LOGGER_URI = None
 
 # Path where you want to save the models outputs (configs, checkpoints and tensorboard logs)
-OUT_PATH = "/"  # "/raid/coqui/Checkpoints/original-YourTTS/"
+OUT_PATH = "outputs"  # "/raid/coqui/Checkpoints/original-YourTTS/"
+os.makedirs(OUT_PATH, exist_ok=True)
 
 # Training Parameters
 OPTIMIZER_WD_ONLY_ON_WEIGHTS = True  # for multi-gpu training please make it False
 START_WITH_EVAL = True  # if True it will star with evaluation
-BATCH_SIZE = 12 # set here the batch size
+BATCH_SIZE = 8 # set here the batch size
 GRAD_ACUMM_STEPS = 84  # set here the grad accumulation steps
 # Note: we recommend that BATCH_SIZE * GRAD_ACUMM_STEPS need to be at least 252 for more efficient training. You can increase/decrease BATCH_SIZE but then set GRAD_ACUMM_STEPS accordingly.
 
