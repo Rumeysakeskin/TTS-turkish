@@ -212,7 +212,9 @@ with open(metadata_path, "w", encoding="utf-8") as out_f:
         # XTTS format: wav_file_path|text|speaker_id|emotion
         # wav_path'i dataset klasörüne göre relative path yap
         relative_wav_path = os.path.relpath(wav_path, BASE_DIR)
-        out_f.write(f"{relative_wav_path}|{text}|{speaker_id}|{emotion}\n")
+        # emotion-data/ prefix'i ekle
+        full_relative_path = f"emotion-data/{relative_wav_path}"
+        out_f.write(f"{full_relative_path}|{text}|{speaker_id}|{emotion}\n")
 
 print(f"\n✅ metadata.txt oluşturuldu: {metadata_path}")
 
