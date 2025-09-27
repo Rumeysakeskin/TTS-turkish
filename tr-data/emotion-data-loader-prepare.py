@@ -115,6 +115,8 @@ print("Oluşturulacak klasör:", BASE_DIR)
 speaker_durations = defaultdict(float)  # saniye cinsinden
 emotion_counts = defaultdict(int)  # emotion sayıları
 total_duration = 0.0
+MAX_SPEAKERS = 35  # Maksimum speaker sayısı
+processed_speakers = set()  # İşlenen speaker'ları takip et
 
 metadata_path = os.path.join(BASE_DIR, "metadata.txt")
 with open(metadata_path, "w", encoding="utf-8") as out_f:
@@ -123,8 +125,24 @@ with open(metadata_path, "w", encoding="utf-8") as out_f:
     out_f.write("# Format: wav_file_path|text|speaker_id|emotion\n")
     out_f.write("# Supported emotions: neutral, angry, sad, happy\n\n")
     for i, sample in enumerate(dataset):
+        # Speaker sayısı kontrolü
+        if len(processed_speakers) >= MAX_SPEAKERS:
+            print(f"\n🛑 Maksimum speaker sayısına ulaşıldı: {MAX_SPEAKERS}")
+            print(f"✅ İşlenen speaker'lar: {sorted(processed_speakers)}")
+            break
+            
         text = normalize_text(sample["text"])
-        speaker = str(sample["speaker_id"])
+        speaker_id = str(sample["speaker_id"])
+        
+        # Speaker ID'yi temizle (sadece sayı kalsın)
+        if speaker_id.startswith("speaker_"):
+            speaker_id = speaker_id.replace("speaker_", "")
+        speaker = f"speaker_{speaker_id}"
+        
+        # Yeni speaker kontrolü
+        if speaker not in processed_speakers:
+            processed_speakers.add(speaker)
+            print(f"🎤 Yeni speaker eklendi: {speaker} (Toplam: {len(processed_speakers)}/{MAX_SPEAKERS})")
         # Dataset'te sadece 4 emotion var: neutral, angry, sad, happy
         emotion = str(sample.get("emotion", "neutral")).lower()
         
@@ -142,7 +160,11 @@ with open(metadata_path, "w", encoding="utf-8") as out_f:
         total_duration += duration
 
         # XTTS için daha düzenli klasör yapısı
-        speaker_dir = os.path.join(BASE_DIR, f"speaker_{speaker}")
+        # speaker değişkeni zaten "speaker_0" formatında olabilir, kontrol et
+        if speaker.startswith("speaker_"):
+            speaker_dir = os.path.join(BASE_DIR, speaker)
+        else:
+            speaker_dir = os.path.join(BASE_DIR, f"speaker_{speaker}")
         os.makedirs(speaker_dir, exist_ok=True)
 
         # Dosya adını emotion ile birlikte oluştur
@@ -160,7 +182,7 @@ with open(metadata_path, "w", encoding="utf-8") as out_f:
         # XTTS format: wav_file_path|text|speaker_id|emotion
         # wav_path'i dataset klasörüne göre relative path yap
         relative_wav_path = os.path.relpath(wav_path, BASE_DIR)
-        out_f.write(f"{relative_wav_path}|{text}|{speaker}|{emotion}\n")
+        out_f.write(f"{relative_wav_path}|{text}|{speaker_id}|{emotion}\n")
 
 print(f"\n✅ metadata.txt oluşturuldu: {metadata_path}")
 
@@ -175,9 +197,12 @@ for spk, dur in sorted(speaker_durations.items(), key=lambda x: float(x[0])):
     print(f"Speaker {spk}: {sec_to_hm(dur)}")
 
 print(f"\n📊 Toplam Süre: {sec_to_hm(total_duration)}")
+print(f"👥 Toplam Speaker Sayısı: {len(processed_speakers)}/{MAX_SPEAKERS}")
 
 print("\n😊 Emotion Dağılımı:")
 for emotion in ["neutral", "angry", "sad", "happy"]:
     count = emotion_counts.get(emotion, 0)
     percentage = (count / sum(emotion_counts.values())) * 100 if sum(emotion_counts.values()) > 0 else 0
     print(f"   {emotion}: {count} örnek ({percentage:.1f}%)")
+
+print(f"\n🎯 İşlenen Speaker'lar: {sorted(processed_speakers)}")
