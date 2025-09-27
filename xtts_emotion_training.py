@@ -90,7 +90,7 @@ if not os.path.isfile(TOKENIZER_FILE) or not os.path.isfile(XTTS_CHECKPOINT):
 
 # Training sentences generations
 SPEAKER_REFERENCE = [
-    "../dataset/speaker_2/0.wav"
+    "emotion-data/speaker_1/angry_000276.wav"
     # speaker reference to be used in training test sentences
 ]
 LANGUAGE = turkish_config.language
