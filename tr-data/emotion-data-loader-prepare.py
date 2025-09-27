@@ -127,83 +127,24 @@ print("Oluşturulacak klasör:", BASE_DIR)
 speaker_durations = defaultdict(float)  # saniye cinsinden
 emotion_counts = defaultdict(int)  # emotion sayıları
 total_duration = 0.0
-MAX_SPEAKERS = 5  # Maksimum speaker sayısı
+MAX_SPEAKERS = 35  # Maksimum speaker sayısı
 processed_speakers = set()  # İşlenen speaker'ları takip et
 
-# --- KALDIĞI YERDEN DEVAM ETME ---
+# --- YARDIMCI FONKSİYONLAR ---
 def sec_to_hm(seconds):
     """Saniyeyi saat:dakika formatına çevir"""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     return f"{h} saat {m} dk"
 
-def load_existing_speakers(metadata_path):
-    """Mevcut metadata.txt'ten işlenen speaker'ları yükle"""
-    existing_speakers = set()
-    if os.path.exists(metadata_path):
-        print("📂 Mevcut metadata.txt bulundu, işlenen speaker'lar yükleniyor...")
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip() and not line.startswith("#"):
-                    parts = line.strip().split("|")
-                    if len(parts) >= 3:
-                        speaker_id = parts[2]
-                        existing_speakers.add(f"speaker_{speaker_id}")
-        print(f"✅ {len(existing_speakers)} speaker bulundu: {sorted(existing_speakers)}")
-    return existing_speakers
-
-def load_existing_stats(metadata_path):
-    """Mevcut metadata.txt'ten istatistikleri yükle"""
-    existing_durations = defaultdict(float)
-    existing_emotions = defaultdict(int)
-    existing_duration = 0.0
-    
-    if os.path.exists(metadata_path):
-        print("📊 Mevcut istatistikler yükleniyor...")
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip() and not line.startswith("#"):
-                    parts = line.strip().split("|")
-                    if len(parts) >= 4:
-                        speaker_id = parts[2]
-                        emotion = parts[3]
-                        # Ses dosyasından süre hesapla (yaklaşık)
-                        wav_path = parts[0]
-                        full_wav_path = os.path.join(BASE_DIR, wav_path)
-                        if os.path.exists(full_wav_path):
-                            try:
-                                import soundfile as sf
-                                audio, sr = sf.read(full_wav_path)
-                                duration = len(audio) / sr
-                                existing_durations[f"speaker_{speaker_id}"] += duration
-                                existing_emotions[emotion] += 1
-                                existing_duration += duration
-                            except:
-                                pass
-        print(f"📈 Mevcut süre: {sec_to_hm(existing_duration)}")
-    return existing_durations, existing_emotions, existing_duration
-
 metadata_path = os.path.join(BASE_DIR, "metadata.txt")
 
-# Mevcut speaker'ları ve istatistikleri yükle
-processed_speakers = load_existing_speakers(metadata_path)
-existing_durations, existing_emotions, existing_duration = load_existing_stats(metadata_path)
-
-# Mevcut istatistikleri ana değişkenlere ekle
-speaker_durations.update(existing_durations)
-emotion_counts.update(existing_emotions)
-total_duration = existing_duration
-
-# Metadata dosyasını aç (append mode)
-mode = "a" if processed_speakers else "w"
-with open(metadata_path, mode, encoding="utf-8") as out_f:
-    # Sadece yeni dosya ise header yaz
-    if not processed_speakers:
-        out_f.write("# XTTS Emotion Dataset - metadata.txt\n")
-        out_f.write("# Format: wav_file_path|text|speaker_id|emotion\n")
-        out_f.write("# Supported emotions: neutral, angry, sad, happy\n\n")
-    else:
-        print(f"🔄 Kaldığı yerden devam ediliyor... ({len(processed_speakers)}/{MAX_SPEAKERS} speaker)")
+# Metadata dosyasını oluştur
+with open(metadata_path, "w", encoding="utf-8") as out_f:
+    # XTTS Emotion Dataset - metadata.txt header
+    out_f.write("# XTTS Emotion Dataset - metadata.txt\n")
+    out_f.write("# Format: wav_file_path|text|speaker_id|emotion\n")
+    out_f.write("# Supported emotions: neutral, angry, sad, happy\n\n")
     for i, sample in enumerate(dataset):
         # Speaker sayısı kontrolü
         if len(processed_speakers) >= MAX_SPEAKERS:
