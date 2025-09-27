@@ -179,6 +179,10 @@ class XTTSDataset(torch.utils.data.Dataset):
             self.failed_samples.add(sample_id)
             return self[1]
 
+        # Emotion mapping
+        emotion_mapping = {"neutral": 0, "angry": 1, "sad": 2, "happy": 3}
+        emotion_id = emotion_mapping.get(sample.get("emotion", "neutral"), 0)
+        
         res = {
             # 'real_text': text,
             "text": tseq,
@@ -191,6 +195,7 @@ class XTTSDataset(torch.utils.data.Dataset):
             if cond_len is not torch.nan
             else torch.tensor([cond_len]),
             "cond_idxs": torch.tensor(cond_idxs) if cond_idxs is not torch.nan else torch.tensor([cond_idxs]),
+            "emotion_ids": torch.tensor(emotion_id, dtype=torch.long),
         }
         return res
 

@@ -175,6 +175,10 @@ class XttsArgs(Coqpit):
     gpt_code_stride_len: int = 1024
     gpt_use_masking_gt_prompt_approach: bool = True
     gpt_use_perceiver_resampler: bool = False
+    
+    # Emotion parameters
+    num_emotions: int = 4
+    emotion_embedding_dim: int = 64
 
     # HifiGAN Decoder params
     input_sample_rate: int = 22050
@@ -238,6 +242,9 @@ class Xtts(BaseTTS):
                 stop_audio_token=self.args.gpt_stop_audio_token,
                 use_perceiver_resampler=self.args.gpt_use_perceiver_resampler,
                 code_stride_len=self.args.gpt_code_stride_len,
+                # Emotion parameters
+                num_emotions=self.args.num_emotions,
+                emotion_embedding_dim=self.args.emotion_embedding_dim,
             )
 
         self.hifigan_decoder = HifiDecoder(
@@ -436,6 +443,8 @@ class Xtts(BaseTTS):
         gpt_cond_chunk_len=6,
         max_ref_len=10,
         sound_norm_refs=False,
+        # Emotion support
+        emotion="neutral",
         **hf_generate_kwargs,
     ):
         """
@@ -496,6 +505,7 @@ class Xtts(BaseTTS):
             top_k=top_k,
             top_p=top_p,
             do_sample=do_sample,
+            emotion=emotion,
             **hf_generate_kwargs,
         )
 
@@ -516,6 +526,8 @@ class Xtts(BaseTTS):
         num_beams=1,
         speed=1.0,
         enable_text_splitting=False,
+        # Emotion support
+        emotion="neutral",
         **hf_generate_kwargs,
     ):
         language = language.split("-")[0]  # remove the country code
@@ -527,6 +539,11 @@ class Xtts(BaseTTS):
         else:
             text = [text]
 
+        # Emotion mapping
+        emotion_mapping = {"neutral": 0, "angry": 1, "sad": 2, "happy": 3}
+        emotion_id = emotion_mapping.get(emotion, 0)
+        emotion_tensor = torch.tensor([emotion_id], dtype=torch.long, device=self.device)
+        
         wavs = []
         gpt_latents_list = []
         for sent in text:
@@ -551,6 +568,7 @@ class Xtts(BaseTTS):
                     length_penalty=length_penalty,
                     repetition_penalty=repetition_penalty,
                     output_attentions=False,
+                    emotion_ids=emotion_tensor,  # ✅ Emotion support
                     **hf_generate_kwargs,
                 )
                 expected_output_len = torch.tensor(

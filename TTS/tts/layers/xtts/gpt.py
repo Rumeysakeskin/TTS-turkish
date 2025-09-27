@@ -108,6 +108,9 @@ class GPT(nn.Module):
         label_smoothing=0.0,
         use_perceiver_resampler=False,
         perceiver_cond_length_compression=256,
+        # Emotion parameters
+        num_emotions=4,
+        emotion_embedding_dim=64,
     ):
         """
         Args:
@@ -141,6 +144,12 @@ class GPT(nn.Module):
 
         self.text_embedding = nn.Embedding(self.number_text_tokens, model_dim)
         self.mel_embedding = nn.Embedding(self.num_audio_tokens, model_dim)
+        
+        # Emotion embedding
+        self.num_emotions = num_emotions
+        self.emotion_embedding_dim = emotion_embedding_dim
+        self.emotion_embedding = nn.Embedding(num_emotions, emotion_embedding_dim)
+        self.emotion_projection = nn.Linear(emotion_embedding_dim, model_dim)
 
         (
             self.gpt,
@@ -377,6 +386,7 @@ class GPT(nn.Module):
         cond_idxs=None,
         cond_lens=None,
         cond_latents=None,
+        emotion_ids=None,
         return_attentions=False,
         return_latent=False,
     ):
@@ -498,6 +508,15 @@ class GPT(nn.Module):
 
         # Compute mel embeddings + positional embeddings
         mel_emb = self.mel_embedding(audio_codes) + self.mel_pos_embedding(audio_codes)
+        
+        # Add emotion embeddings if provided
+        if emotion_ids is not None:
+            emotion_emb = self.emotion_embedding(emotion_ids)  # (batch_size, emotion_embedding_dim)
+            emotion_emb = self.emotion_projection(emotion_emb)  # (batch_size, model_dim)
+            
+            # Add emotion embedding to text and mel embeddings
+            text_emb = text_emb + emotion_emb.unsqueeze(1)  # Broadcast to sequence length
+            mel_emb = mel_emb + emotion_emb.unsqueeze(1)  # Broadcast to sequence length
 
         # Compute speech conditioning input
         if cond_latents is None:
@@ -562,10 +581,19 @@ class GPT(nn.Module):
         self,
         cond_latents,
         text_inputs,
+        emotion_ids=None,
     ):
         text_inputs = F.pad(text_inputs, (0, 1), value=self.stop_text_token)
         text_inputs = F.pad(text_inputs, (1, 0), value=self.start_text_token)
         emb = self.text_embedding(text_inputs) + self.text_pos_embedding(text_inputs)
+        
+        # Add emotion embedding if provided
+        if emotion_ids is not None:
+            emotion_emb = self.emotion_embedding(emotion_ids)  # (batch_size, emotion_embedding_dim)
+            emotion_emb = self.emotion_projection(emotion_emb)  # (batch_size, model_dim)
+            # Add emotion embedding to text embeddings
+            emb = emb + emotion_emb.unsqueeze(1)  # Broadcast to sequence length
+        
         emb = torch.cat([cond_latents, emb], dim=1)
         self.gpt_inference.store_prefix_emb(emb)
         gpt_inputs = torch.full(
@@ -584,9 +612,10 @@ class GPT(nn.Module):
         self,
         cond_latents,
         text_inputs,
+        emotion_ids=None,
         **hf_generate_kwargs,
     ):
-        gpt_inputs = self.compute_embeddings(cond_latents, text_inputs)
+        gpt_inputs = self.compute_embeddings(cond_latents, text_inputs, emotion_ids)
         gen = self.gpt_inference.generate(
             gpt_inputs,
             bos_token_id=self.start_audio_token,

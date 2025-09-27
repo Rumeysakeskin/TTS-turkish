@@ -231,6 +231,9 @@ class TTS(nn.Module):
             raise ValueError("Model is not multi-speaker but `speaker` is provided.")
         if not self.is_multi_lingual and language is not None:
             raise ValueError("Model is not multi-lingual but `language` is provided.")
+        # XTTS emotion support
+        if emotion is not None and not hasattr(self.synthesizer, 'full_inference'):
+            raise ValueError("Emotion can only be used with XTTS models.")
         if not emotion is None and not speed is None:
             raise ValueError("Emotion and speed can only be used with Coqui Studio models. Which is discontinued.")
 
@@ -273,18 +276,29 @@ class TTS(nn.Module):
         self._check_arguments(
             speaker=speaker, language=language, speaker_wav=speaker_wav, emotion=emotion, speed=speed, **kwargs
         )
-        wav = self.synthesizer.tts(
-            text=text,
-            speaker_name=speaker,
-            language_name=language,
-            speaker_wav=speaker_wav,
-            reference_wav=None,
-            style_wav=None,
-            style_text=None,
-            reference_speaker_name=None,
-            split_sentences=split_sentences,
-            **kwargs,
-        )
+        # XTTS emotion support
+        if emotion is not None and hasattr(self.synthesizer, 'full_inference'):
+            # Use XTTS full_inference with emotion
+            wav = self.synthesizer.full_inference(
+                text=text,
+                ref_audio_path=speaker_wav,
+                language=language,
+                emotion=emotion,
+                **kwargs,
+            )
+        else:
+            wav = self.synthesizer.tts(
+                text=text,
+                speaker_name=speaker,
+                language_name=language,
+                speaker_wav=speaker_wav,
+                reference_wav=None,
+                style_wav=None,
+                style_text=None,
+                reference_speaker_name=None,
+                split_sentences=split_sentences,
+                **kwargs,
+            )
         return wav
 
     def tts_to_file(
@@ -336,6 +350,7 @@ class TTS(nn.Module):
             speaker=speaker,
             language=language,
             speaker_wav=speaker_wav,
+            emotion=emotion,
             split_sentences=split_sentences,
             **kwargs,
         )
