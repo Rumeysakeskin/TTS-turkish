@@ -80,23 +80,35 @@ def normalize_text(text):
 def ensure_wav_format(wav_path):
     """22050 Hz, mono, 16-bit değilse sox ile düzelt."""
     try:
-        info = subprocess.check_output(["sox", "--i", wav_path], text=True)
+        info = subprocess.check_output(["sox", "--i", wav_path], text=True, stderr=subprocess.DEVNULL)
         sr = int(re.search(r"Sample Rate\s+:\s+(\d+)", info).group(1))
         ch = int(re.search(r"Channels\s+:\s+(\d+)", info).group(1))
         enc = re.search(r"Precision\s+:\s+(\d+)-bit", info).group(1)
 
         if sr == 22050 and ch == 1 and enc == "16":
-            return  # zaten uygun
+            return True  # zaten uygun
 
         print(f"⚠️ Dönüştürülüyor: {wav_path} ({sr}Hz, {ch}ch, {enc}-bit)")
         tmp_path = wav_path + ".tmp.wav"
-        subprocess.run([
+        
+        # Sox komutunu çalıştır ve warning'leri kontrol et
+        result = subprocess.run([
             "sox", wav_path, "-r", "22050", "-c", "1", "-b", "16", tmp_path
-        ], check=True)
+        ], capture_output=True, text=True)
+        
+        # Warning kontrolü
+        if "WARN" in result.stderr or "rate clipped" in result.stderr:
+            print(f"❌ Sox warning: {wav_path} - dosya atlanıyor")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return False
+            
         os.replace(tmp_path, wav_path)
+        return True
 
     except Exception as e:
-        print(f"sox kontrol hatası: {e}")
+        print(f"❌ Sox hatası: {wav_path} - {e}")
+        return False
 
 # --- DATASET LOAD ---
 dataset = load_dataset("Codyfederer/tr-full-dataset", split="train")
@@ -115,15 +127,83 @@ print("Oluşturulacak klasör:", BASE_DIR)
 speaker_durations = defaultdict(float)  # saniye cinsinden
 emotion_counts = defaultdict(int)  # emotion sayıları
 total_duration = 0.0
-MAX_SPEAKERS = 35  # Maksimum speaker sayısı
+MAX_SPEAKERS = 5  # Maksimum speaker sayısı
 processed_speakers = set()  # İşlenen speaker'ları takip et
 
+# --- KALDIĞI YERDEN DEVAM ETME ---
+def sec_to_hm(seconds):
+    """Saniyeyi saat:dakika formatına çevir"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    return f"{h} saat {m} dk"
+
+def load_existing_speakers(metadata_path):
+    """Mevcut metadata.txt'ten işlenen speaker'ları yükle"""
+    existing_speakers = set()
+    if os.path.exists(metadata_path):
+        print("📂 Mevcut metadata.txt bulundu, işlenen speaker'lar yükleniyor...")
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip() and not line.startswith("#"):
+                    parts = line.strip().split("|")
+                    if len(parts) >= 3:
+                        speaker_id = parts[2]
+                        existing_speakers.add(f"speaker_{speaker_id}")
+        print(f"✅ {len(existing_speakers)} speaker bulundu: {sorted(existing_speakers)}")
+    return existing_speakers
+
+def load_existing_stats(metadata_path):
+    """Mevcut metadata.txt'ten istatistikleri yükle"""
+    existing_durations = defaultdict(float)
+    existing_emotions = defaultdict(int)
+    existing_duration = 0.0
+    
+    if os.path.exists(metadata_path):
+        print("📊 Mevcut istatistikler yükleniyor...")
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip() and not line.startswith("#"):
+                    parts = line.strip().split("|")
+                    if len(parts) >= 4:
+                        speaker_id = parts[2]
+                        emotion = parts[3]
+                        # Ses dosyasından süre hesapla (yaklaşık)
+                        wav_path = parts[0]
+                        full_wav_path = os.path.join(BASE_DIR, wav_path)
+                        if os.path.exists(full_wav_path):
+                            try:
+                                import soundfile as sf
+                                audio, sr = sf.read(full_wav_path)
+                                duration = len(audio) / sr
+                                existing_durations[f"speaker_{speaker_id}"] += duration
+                                existing_emotions[emotion] += 1
+                                existing_duration += duration
+                            except:
+                                pass
+        print(f"📈 Mevcut süre: {sec_to_hm(existing_duration)}")
+    return existing_durations, existing_emotions, existing_duration
+
 metadata_path = os.path.join(BASE_DIR, "metadata.txt")
-with open(metadata_path, "w", encoding="utf-8") as out_f:
-    # XTTS Emotion Dataset - metadata.txt header
-    out_f.write("# XTTS Emotion Dataset - metadata.txt\n")
-    out_f.write("# Format: wav_file_path|text|speaker_id|emotion\n")
-    out_f.write("# Supported emotions: neutral, angry, sad, happy\n\n")
+
+# Mevcut speaker'ları ve istatistikleri yükle
+processed_speakers = load_existing_speakers(metadata_path)
+existing_durations, existing_emotions, existing_duration = load_existing_stats(metadata_path)
+
+# Mevcut istatistikleri ana değişkenlere ekle
+speaker_durations.update(existing_durations)
+emotion_counts.update(existing_emotions)
+total_duration = existing_duration
+
+# Metadata dosyasını aç (append mode)
+mode = "a" if processed_speakers else "w"
+with open(metadata_path, mode, encoding="utf-8") as out_f:
+    # Sadece yeni dosya ise header yaz
+    if not processed_speakers:
+        out_f.write("# XTTS Emotion Dataset - metadata.txt\n")
+        out_f.write("# Format: wav_file_path|text|speaker_id|emotion\n")
+        out_f.write("# Supported emotions: neutral, angry, sad, happy\n\n")
+    else:
+        print(f"🔄 Kaldığı yerden devam ediliyor... ({len(processed_speakers)}/{MAX_SPEAKERS} speaker)")
     for i, sample in enumerate(dataset):
         # Speaker sayısı kontrolü
         if len(processed_speakers) >= MAX_SPEAKERS:
@@ -174,7 +254,16 @@ with open(metadata_path, "w", encoding="utf-8") as out_f:
         lab_path = os.path.join(speaker_dir, lab_name)
 
         sf.write(wav_path, audio, sr)
-        ensure_wav_format(wav_path)
+        
+        # Sox format kontrolü ve warning filtreleme
+        if not ensure_wav_format(wav_path):
+            print(f"❌ Dosya atlanıyor: {wav_path}")
+            # Dosyayı sil
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+            if os.path.exists(lab_path):
+                os.remove(lab_path)
+            continue  # Bu sample'ı atla
 
         with open(lab_path, "w", encoding="utf-8") as f:
             f.write(text)
@@ -187,13 +276,9 @@ with open(metadata_path, "w", encoding="utf-8") as out_f:
 print(f"\n✅ metadata.txt oluşturuldu: {metadata_path}")
 
 # --- SONUÇLAR ---
-def sec_to_hm(seconds):
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    return f"{h} saat {m} dk"
 
 print("\n🔊 Speaker Bazlı Süreler:")
-for spk, dur in sorted(speaker_durations.items(), key=lambda x: float(x[0])):
+for spk, dur in sorted(speaker_durations.items(), key=lambda x: int(x[0].replace("speaker_", "")) if x[0].startswith("speaker_") else 0):
     print(f"Speaker {spk}: {sec_to_hm(dur)}")
 
 print(f"\n📊 Toplam Süre: {sec_to_hm(total_duration)}")
