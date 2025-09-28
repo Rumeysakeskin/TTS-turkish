@@ -237,6 +237,7 @@ class GPTTrainer(BaseTTS):
                     self.config,
                     s_info["speaker_wav"],
                     s_info["language"],
+                    emotion=s_info.get("emotion"),
                     gpt_cond_len=3,
                 )["wav"]
                 test_audios["{}-audio".format(idx)] = wav
@@ -261,6 +262,9 @@ class GPTTrainer(BaseTTS):
         batch["wav_lengths"] = batch["wav_lengths"]
         batch["text_inputs"] = batch["padded_text"]
         batch["cond_idxs"] = batch["cond_idxs"]
+        device = batch["text_lengths"].device
+        batch["emotion_id"] = batch["emotion_id"].to(device)
+        batch["emotion_weight"] = batch["emotion_weight"].to(device)
         # compute conditioning mel specs
         # transform waves from torch.Size([B, num_cond_samples, 1, T] to torch.Size([B * num_cond_samples, 1, T] because if is faster than iterate the tensor
         B, num_cond_samples, C, T = batch["conditioning"].size()
@@ -306,7 +310,15 @@ class GPTTrainer(BaseTTS):
         cond_lens = batch["cond_lens"]
 
         loss_text, loss_mel, _ = self.forward(
-            text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels, cond_idxs, cond_lens
+            text_inputs,
+            text_lengths,
+            audio_codes,
+            wav_lengths,
+            cond_mels,
+            cond_idxs,
+            cond_lens,
+            emotion_ids=batch["emotion_id"],
+            sample_weights=batch["emotion_weight"],
         )
         loss_dict["loss_text_ce"] = loss_text * self.args.gpt_loss_text_ce_weight
         loss_dict["loss_mel_ce"] = loss_mel * self.args.gpt_loss_mel_ce_weight
@@ -316,7 +328,29 @@ class GPTTrainer(BaseTTS):
     def eval_step(self, batch, criterion):
         # ignore masking for more consistent evaluation
         batch["cond_idxs"] = None
-        return self.train_step(batch, criterion)
+        loss_dict = {}
+        cond_mels = batch["cond_mels"]
+        text_inputs = batch["text_inputs"]
+        text_lengths = batch["text_lengths"]
+        audio_codes = batch["audio_codes"]
+        wav_lengths = batch["wav_lengths"]
+        cond_lens = batch["cond_lens"]
+
+        loss_text, loss_mel, _ = self.forward(
+            text_inputs,
+            text_lengths,
+            audio_codes,
+            wav_lengths,
+            cond_mels,
+            None,
+            cond_lens,
+            emotion_ids=batch["emotion_id"],
+            sample_weights=None,
+        )
+        loss_dict["loss_text_ce"] = loss_text * self.args.gpt_loss_text_ce_weight
+        loss_dict["loss_mel_ce"] = loss_mel * self.args.gpt_loss_mel_ce_weight
+        loss_dict["loss"] = loss_dict["loss_text_ce"] + loss_dict["loss_mel_ce"]
+        return {"model_outputs": None}, loss_dict
 
     def on_train_epoch_start(self, trainer):
         trainer.model.eval()  # the whole model to eval

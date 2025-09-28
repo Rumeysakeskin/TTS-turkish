@@ -13,7 +13,7 @@ torch.set_num_threads(24)
 """
     XTTS Emotion Training Script
     This script trains XTTS with emotion support for Turkish language.
-    Emotion categories: neutral (0), angry (1), sad (2), happy (3)
+    Emotion categories: neutral (0), angry (1), happy (2)
 """
 CURRENT_PATH = os.getcwd()
 
@@ -35,9 +35,14 @@ BATCH_SIZE = 8 # set here the batch size
 GRAD_ACUMM_STEPS = 84  # set here the grad accumulation steps
 # Note: we recommend that BATCH_SIZE * GRAD_ACUMM_STEPS need to be at least 252 for more efficient training. You can increase/decrease BATCH_SIZE but then set GRAD_ACUMM_STEPS accordingly.
 
+# emotion setup
+EMOTIONS = ["neutral", "angry", "happy"]
+EXCLUDED_EMOTIONS = ["sad"]
+EMOTION_DROPOUT = 0.1
+
 # init configs
 turkish_config = BaseDatasetConfig(
-    formatter="custom_turkish_formatter_pseudo_speaker",  # ✅ Custom emotion formatter
+    formatter="custom_turkish_formatter_emotion",  # ✅ Emotion-aware formatter
     dataset_name="emotion-data",
     meta_file_train="metadata.txt",
     path="emotion-data",
@@ -113,6 +118,10 @@ def main():
         gpt_stop_audio_token=1025,
         gpt_use_masking_gt_prompt_approach=True,
         gpt_use_perceiver_resampler=True,
+        num_emotions=len(EMOTIONS),
+        emotion_labels=EMOTIONS,
+        emotion_exclude=EXCLUDED_EMOTIONS,
+        emotion_dropout_p=EMOTION_DROPOUT,
     )
     # define audio config
     audio_config = XttsAudioConfig(sample_rate=22050, dvae_sample_rate=22050, output_sample_rate=24000)
@@ -124,7 +133,7 @@ def main():
         project_name=PROJECT_NAME,
         run_description="""
             GPT XTTS training with emotion support for Turkish
-            Emotion categories: neutral, angry, sad, happy
+            Emotion categories: neutral, angry, happy
             """,
         dashboard_logger=DASHBOARD_LOGGER,
         logger_uri=LOGGER_URI,
@@ -162,12 +171,6 @@ def main():
                 "speaker_wav": SPEAKER_REFERENCE,
                 "language": LANGUAGE,
                 "emotion": "angry",  # ✅ Emotion test
-            },
-            {
-                "text": "çok üzgünüm, bu beni çok etkiliyor",
-                "speaker_wav": SPEAKER_REFERENCE,
-                "language": LANGUAGE,
-                "emotion": "sad",  # ✅ Emotion test
             },
             {
                 "text": "harika bir gün! çok mutluyum!",

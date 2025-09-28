@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import List, Optional
 
 import librosa
 import torch
@@ -176,6 +177,13 @@ class XttsArgs(Coqpit):
     gpt_use_masking_gt_prompt_approach: bool = True
     gpt_use_perceiver_resampler: bool = False
 
+    # Emotion conditioning params
+    num_emotions: int = 0
+    emotion_embedding_dim: Optional[int] = None
+    emotion_dropout_p: float = 0.0
+    emotion_labels: Optional[List[str]] = None
+    emotion_exclude: Optional[List[str]] = None
+
     # HifiGAN Decoder params
     input_sample_rate: int = 22050
     output_sample_rate: int = 24000
@@ -214,6 +222,22 @@ class Xtts(BaseTTS):
         self.gpt = None
         self.init_models()
         self.register_buffer("mel_stats", torch.ones(80))
+        self._emotion_label_to_id = None
+
+    def resolve_emotion_id(self, emotion=None, emotion_id=None):
+        if self.args.num_emotions is None or self.args.num_emotions <= 0:
+            return None
+        if emotion_id is not None:
+            return int(emotion_id)
+        labels = self.args.emotion_labels or []
+        if not labels:
+            return 0
+        if self._emotion_label_to_id is None:
+            self._emotion_label_to_id = {label.lower(): idx for idx, label in enumerate(labels)}
+        if emotion is None:
+            return self._emotion_label_to_id.get("neutral", 0)
+        emotion_key = str(emotion).lower()
+        return self._emotion_label_to_id.get(emotion_key, self._emotion_label_to_id.get("neutral", 0))
 
     def init_models(self):
         """Initialize the models. We do it here since we need to load the tokenizer first."""
@@ -238,6 +262,9 @@ class Xtts(BaseTTS):
                 stop_audio_token=self.args.gpt_stop_audio_token,
                 use_perceiver_resampler=self.args.gpt_use_perceiver_resampler,
                 code_stride_len=self.args.gpt_code_stride_len,
+                num_emotions=self.args.num_emotions,
+                emotion_embedding_dim=self.args.emotion_embedding_dim,
+                emotion_dropout_p=self.args.emotion_dropout_p,
             )
 
         self.hifigan_decoder = HifiDecoder(
@@ -398,6 +425,8 @@ class Xtts(BaseTTS):
         assert (
             "zh-cn" if language == "zh" else language in self.config.languages
         ), f" ❗ Language {language} is not supported. Supported languages are {self.config.languages}"
+        emotion = kwargs.pop("emotion", None)
+        emotion_id = kwargs.pop("emotion_id", None)
         # Use generally found best tuning knobs for generation.
         settings = {
             "temperature": config.temperature,
@@ -409,14 +438,29 @@ class Xtts(BaseTTS):
         settings.update(kwargs)  # allow overriding of preset settings with kwargs
         if speaker_id is not None:
             gpt_cond_latent, speaker_embedding = self.speaker_manager.speakers[speaker_id].values()
-            return self.inference(text, language, gpt_cond_latent, speaker_embedding, **settings)
+            return self.inference(
+                text,
+                language,
+                gpt_cond_latent,
+                speaker_embedding,
+                emotion=emotion,
+                emotion_id=emotion_id,
+                **settings,
+            )
         settings.update({
             "gpt_cond_len": config.gpt_cond_len,
             "gpt_cond_chunk_len": config.gpt_cond_chunk_len,
             "max_ref_len": config.max_ref_len,
             "sound_norm_refs": config.sound_norm_refs,
         })
-        return self.full_inference(text, speaker_wav, language, **settings)
+        return self.full_inference(
+            text,
+            speaker_wav,
+            language,
+            emotion=emotion,
+            emotion_id=emotion_id,
+            **settings,
+        )
 
     @torch.inference_mode()
     def full_inference(
@@ -436,6 +480,8 @@ class Xtts(BaseTTS):
         gpt_cond_chunk_len=6,
         max_ref_len=10,
         sound_norm_refs=False,
+        emotion=None,
+        emotion_id=None,
         **hf_generate_kwargs,
     ):
         """
@@ -490,6 +536,8 @@ class Xtts(BaseTTS):
             language,
             gpt_cond_latent,
             speaker_embedding,
+            emotion=emotion,
+            emotion_id=emotion_id,
             temperature=temperature,
             length_penalty=length_penalty,
             repetition_penalty=repetition_penalty,
@@ -516,12 +564,24 @@ class Xtts(BaseTTS):
         num_beams=1,
         speed=1.0,
         enable_text_splitting=False,
+        emotion=None,
+        emotion_id=None,
         **hf_generate_kwargs,
     ):
         language = language.split("-")[0]  # remove the country code
         length_scale = 1.0 / max(speed, 0.05)
         gpt_cond_latent = gpt_cond_latent.to(self.device)
         speaker_embedding = speaker_embedding.to(self.device)
+        resolved_emotion_id = self.resolve_emotion_id(emotion=emotion, emotion_id=emotion_id)
+        if resolved_emotion_id is not None:
+            emotion_tensor = torch.full(
+                (gpt_cond_latent.shape[0],),
+                resolved_emotion_id,
+                dtype=torch.long,
+                device=self.device,
+            )
+        else:
+            emotion_tensor = None
         if enable_text_splitting:
             text = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
@@ -541,6 +601,7 @@ class Xtts(BaseTTS):
                 gpt_codes = self.gpt.generate(
                     cond_latents=gpt_cond_latent,
                     text_inputs=text_tokens,
+                    emotion_ids=emotion_tensor,
                     input_tokens=None,
                     do_sample=do_sample,
                     top_p=top_p,
@@ -564,6 +625,7 @@ class Xtts(BaseTTS):
                     gpt_codes,
                     expected_output_len,
                     cond_latents=gpt_cond_latent,
+                    emotion_ids=emotion_tensor,
                     return_attentions=False,
                     return_latent=True,
                 )
@@ -580,6 +642,7 @@ class Xtts(BaseTTS):
             "wav": torch.cat(wavs, dim=0).numpy(),
             "gpt_latents": torch.cat(gpt_latents_list, dim=1).numpy(),
             "speaker_embedding": speaker_embedding,
+            "emotion_id": resolved_emotion_id,
         }
 
     def handle_chunks(self, wav_gen, wav_gen_prev, wav_overlap, overlap_len):
