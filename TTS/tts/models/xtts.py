@@ -584,6 +584,7 @@ class Xtts(BaseTTS):
                     cond_latents=gpt_cond_latent,
                     return_attentions=False,
                     return_latent=True,
+                    emotion_ids=emotion_tensor,
                 )
 
                 if length_scale != 1.0:

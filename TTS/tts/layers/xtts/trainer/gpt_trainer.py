@@ -251,6 +251,7 @@ class GPTTrainer(BaseTTS):
                     self.config,
                     s_info["speaker_wav"],
                     s_info["language"],
+                    emotion=s_info.get("emotion", "neutral"),
                     gpt_cond_len=3,
                 )["wav"]
                 test_audios["{}-audio".format(idx)] = wav
