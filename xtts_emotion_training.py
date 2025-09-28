@@ -114,8 +114,8 @@ def main():
         gpt_use_masking_gt_prompt_approach=True,
         gpt_use_perceiver_resampler=True,
         # ✅ Emotion parameters
-        num_emotions=4,  # Number of emotion classes (neutral, angry, sad, happy)
-        emotion_embedding_dim=64,  # Emotion embedding dimension
+        #num_emotions=4,  # Number of emotion classes (neutral, angry, sad, happy)
+        #emotion_embedding_dim=64,  # Emotion embedding dimension
     )
     # define audio config
     audio_config = XttsAudioConfig(sample_rate=22050, dvae_sample_rate=22050, output_sample_rate=24000)
