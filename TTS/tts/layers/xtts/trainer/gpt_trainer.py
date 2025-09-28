@@ -202,7 +202,17 @@ class GPTTrainer(BaseTTS):
     def device(self):
         return next(self.parameters()).device
 
-    def forward(self, text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels, cond_idxs, cond_lens):
+    def forward(
+        self,
+        text_inputs,
+        text_lengths,
+        audio_codes,
+        wav_lengths,
+        cond_mels,
+        cond_idxs,
+        cond_lens,
+        emotion_ids=None,
+    ):
         """
         Forward pass that uses both text and voice in either text conditioning mode or voice conditioning mode
         (actuated by `text_first`).
@@ -223,6 +233,7 @@ class GPTTrainer(BaseTTS):
             cond_mels=cond_mels,
             cond_idxs=cond_idxs,
             cond_lens=cond_lens,
+            emotion_ids=emotion_ids,
         )
         return losses
 
@@ -292,6 +303,7 @@ class GPTTrainer(BaseTTS):
         codes = self.dvae.get_codebook_indices(dvae_mel_spec)
 
         batch["audio_codes"] = codes
+        batch["emotion_ids"] = batch["emotion_ids"].to(self.device)
         # delete useless batch tensors
         del batch["padded_text"]
         del batch["wav"]
@@ -307,9 +319,17 @@ class GPTTrainer(BaseTTS):
         wav_lengths = batch["wav_lengths"]
         cond_idxs = batch["cond_idxs"]
         cond_lens = batch["cond_lens"]
+        emotion_ids = batch["emotion_ids"]
 
         loss_text, loss_mel, _ = self.forward(
-            text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels, cond_idxs, cond_lens
+            text_inputs,
+            text_lengths,
+            audio_codes,
+            wav_lengths,
+            cond_mels,
+            cond_idxs,
+            cond_lens,
+            emotion_ids=emotion_ids,
         )
         loss_dict["loss_text_ce"] = loss_text * self.args.gpt_loss_text_ce_weight
         loss_dict["loss_mel_ce"] = loss_mel * self.args.gpt_loss_mel_ce_weight

@@ -216,6 +216,7 @@ class XTTSDataset(torch.utils.data.Dataset):
         batch["conditioning"] = torch.stack(batch["conditioning"])
         batch["cond_lens"] = torch.stack(batch["cond_lens"])
         batch["cond_idxs"] = torch.stack(batch["cond_idxs"])
+        batch["emotion_ids"] = torch.stack(batch["emotion_ids"])
 
         if torch.any(batch["cond_idxs"].isnan()):
             batch["cond_idxs"] = None
