@@ -37,7 +37,7 @@ GRAD_ACUMM_STEPS = 84  # set here the grad accumulation steps
 
 # init configs
 turkish_config = BaseDatasetConfig(
-    formatter="custom_turkish_formatter_emotion",  # ✅ Custom emotion formatter
+    formatter="custom_turkish_formatter_pseudo_speaker",  # ✅ Custom emotion formatter
     dataset_name="emotion-data",
     meta_file_train="metadata.txt",
     path="emotion-data",
@@ -113,9 +113,6 @@ def main():
         gpt_stop_audio_token=1025,
         gpt_use_masking_gt_prompt_approach=True,
         gpt_use_perceiver_resampler=True,
-        # ✅ Emotion parameters
-        #num_emotions=4,  # Number of emotion classes (neutral, angry, sad, happy)
-        #emotion_embedding_dim=64,  # Emotion embedding dimension
     )
     # define audio config
     audio_config = XttsAudioConfig(sample_rate=22050, dvae_sample_rate=22050, output_sample_rate=24000)
