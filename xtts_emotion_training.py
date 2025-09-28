@@ -181,6 +181,10 @@ def main():
         ],
     )
 
+    # Emotion-specific warmup schedule: freeze the GPT except emotion layers for a few epochs
+    config.warmup_epochs = 2
+    config.warmup_learning_rate = 3e-05
+
     # init the model from config
     model = GPTTrainer.init_from_config(config)
 
