@@ -1,0 +1,9 @@
+datasets
+soundfile
+apt update
+apt install sox libsox-fmt-all -y
+apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev
+torchcodec
+torch
+transformers==4.30.2
+pip install -e .
