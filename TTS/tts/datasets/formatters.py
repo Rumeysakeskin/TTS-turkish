@@ -626,64 +626,63 @@ def custom_turkish_formatter_emotion(root_path, meta_file, ignored_speakers=None
 import os
 
 def custom_turkish_formatter_pseudo_speaker(root_path, meta_file, ignored_speakers=None):
-    """
-    Custom Turkish formatter with emotion support (pseudo-speaker).
-    
-    Metadata formatı:
-    <relative_or_full_path>|<transcription>|<speaker_id>|<emotion>
-    
-    Örnek satır:
-    emotion-data/speaker_0/happy_000001.wav|dört temmuz u geride bıraktık|0|happy
-    
-    Çıktı örneği:
-    {
-        "audio_file": ".../emotion-data/speaker_0/happy_000001.wav",
-        "text": "dört temmuz u geride bıraktık",
-        "speaker_name": "speaker_0_happy",
-        "language": "tr",
-        "root_path": ".../emotion-data"
-    }
-    """
-
+    """Custom Turkish formatter with emotion support for XTTS (pseudo-speaker)."""
     txt_file = os.path.join(root_path, meta_file)
     items = []
-
     with open(txt_file, "r", encoding="utf-8") as ttf:
         for line in ttf:
-            if not line.strip():
-                continue
+            if line.strip():
+                parts = line.strip().split("|")
+                if len(parts) >= 3:
+                    wav_file = parts[0]
+                    text = parts[1]
+                    speaker_id = parts[2]
+                    emotion = parts[3].lower() if len(parts) > 3 else "neutral"
 
-            parts = line.strip().split("|")
-            if len(parts) < 3:
-                print(f"Warning: Missing information in line: {line}")
-                continue
+                    # ignore speakers
+                    if isinstance(ignored_speakers, list) and speaker_id in ignored_speakers:
+                        continue
 
-            wav_relpath = parts[0]
-            text = parts[1]
-            speaker_id = parts[2]
-            emotion = parts[3].lower() if len(parts) > 3 else "neutral"
+                    # pseudo-speaker = speaker + emotion
+                    speaker_name = f"speaker_{speaker_id}_{emotion}"
 
-            # speaker+emotion birleşimi (pseudo-speaker)
-            speaker_name = f"speaker_{speaker_id}_{emotion}"
+                    items.append({
+                        "audio_file": wav_file,
+                        "text": text,
+                        "speaker_name": speaker_name,  # pseudo-speaker
+                        "language": "tr",
+                        "root_path": root_path
+                    })
+    return items
 
-            # ignore list kontrolü
-            if isinstance(ignored_speakers, list) and speaker_id in ignored_speakers:
-                continue
 
-            # tam path
-            audio_path = os.path.join(root_path, wav_relpath)
-            if not os.path.exists(audio_path):
-                print(f"Audio file does not exist: {audio_path}")
-                continue
-
-            items.append({
-                "audio_file": audio_path,
-                "text": text,
-                "speaker_name": speaker_name,
-                "language": "tr",
-                "root_path": root_path
-            })
-
+def custom_turkish_formatter_emotion(root_path, meta_file, ignored_speakers=None):
+    """Custom Turkish formatter with emotion support for XTTS"""
+    txt_file = os.path.join(root_path, meta_file)
+    items = []
+    with open(txt_file, "r", encoding="utf-8") as ttf:
+        for line in ttf:
+            if line.strip():
+                parts = line.strip().split("|")
+                if len(parts) >= 3:
+                    wav_file = parts[0]
+                    text = parts[1]
+                    speaker_id = parts[2]
+                    emotion = parts[3] if len(parts) > 3 else "neutral"
+                    
+                    # ignore speakers
+                    if isinstance(ignored_speakers, list):
+                        if speaker_id in ignored_speakers:
+                            continue
+                    
+                    items.append({
+                        "audio_file": wav_file,
+                        "text": text,
+                        "speaker_name": speaker_id,
+                        "language": "tr",
+                        "emotion": emotion,
+                        "root_path": root_path
+                    })
     return items
 
 
