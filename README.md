@@ -12,6 +12,8 @@ The model is optimized for:
 - expressive prosody without sacrificing intelligibility
 - compatibility with existing XTTS workflows
 
+**⬇️ The original 🐸TTS documentation and usage instructions continue below.**
+
 
 ## 🐸Coqui.ai News
 - 📣 ⓍTTSv2 is here with 16 languages and better performance across the board.
