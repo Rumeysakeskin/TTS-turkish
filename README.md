@@ -1,17 +1,3 @@
-### 🔊 Turkish Emotion-Aware XTTS v2 Model
-
-👉 Model Page (Hugging Face):
-
-**https://huggingface.co/rumeyskeskn/Turkish-emotion-XTTS-TTS-model**
-
-This work is based on the original XTTS v2 architecture and extends it with emotion-aware conditioning mechanisms to improve speech naturalness, prosodic consistency, and expressive richness specifically for Turkish.
-
-The model is optimized for:
-
-- **Turkish emotional speech synthesis**
-- expressive prosody without sacrificing intelligibility
-- compatibility with existing XTTS workflows
-
 **⬇️ The original 🐸TTS documentation and usage instructions continue below.**
 
 
