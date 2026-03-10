@@ -29,6 +29,8 @@ class GPTTrainerConfig(XttsConfig):
     weighted_loss_attrs: dict = field(default_factory=lambda: {})
     weighted_loss_multipliers: dict = field(default_factory=lambda: {})
     test_sentences: List[dict] = field(default_factory=lambda: [])
+    warmup_epochs: int = 2
+    warmup_learning_rate: float = 3e-05
 
 
 @dataclass
@@ -79,6 +81,22 @@ class GPTTrainer(BaseTTS):
         self.xtts.tokenizer = VoiceBpeTokenizer(self.args.tokenizer_file)
         # init gpt encoder and hifigan decoder
         self.xtts.init_models()
+
+        self._warmup_epochs_seen = 0
+        self._warmup_done = True
+        self._warmup_target_names = ("emotion_embedding", "emotion_projection")
+
+        warmup_epochs = getattr(self.config, "warmup_epochs", 0)
+        has_emotion_layer = getattr(self.xtts.gpt, "emotion_embedding", None) is not None
+        self._warmup_active = warmup_epochs > 0 and has_emotion_layer
+
+        if self._warmup_active:
+            self._warmup_done = False
+            self._freeze_all_except_emotion()
+            print(
+                f" > Emotion warmup enabled for {self.config.warmup_epochs} epoch(s)."
+                f" Warmup LR: {getattr(self.config, 'warmup_learning_rate', self.config.lr):.2e}"
+            )
 
         if self.args.xtts_checkpoint:
             self.load_checkpoint(self.config, self.args.xtts_checkpoint, eval=False, strict=False)
@@ -199,7 +217,40 @@ class GPTTrainer(BaseTTS):
     def device(self):
         return next(self.parameters()).device
 
-    def forward(self, text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels, cond_idxs, cond_lens):
+    def _get_stage_learning_rate(self) -> float:
+        if getattr(self, "_warmup_active", False) and not getattr(self, "_warmup_done", True):
+            return getattr(self.config, "warmup_learning_rate", self.config.lr)
+        return self.config.lr
+
+    def _freeze_all_except_emotion(self):
+        frozen, trainable = 0, 0
+        for name, param in self.xtts.gpt.named_parameters():
+            keep = any(tag in name for tag in self._warmup_target_names)
+            param.requires_grad = keep
+            if keep:
+                trainable += 1
+            else:
+                frozen += 1
+        print(f" > Freezing GPT for emotion warmup. Trainable params: {trainable}, frozen params: {frozen}")
+
+    def _unfreeze_all_parameters(self):
+        for param in self.xtts.gpt.parameters():
+            if not param.requires_grad:
+                param.requires_grad = True
+
+
+    def forward(
+        self,
+        text_inputs,
+        text_lengths,
+        audio_codes,
+        wav_lengths,
+        cond_mels,
+        cond_idxs,
+        cond_lens,
+        emotion_ids=None,
+        sample_weights=None,
+    ):
         """
         Forward pass that uses both text and voice in either text conditioning mode or voice conditioning mode
         (actuated by `text_first`).
@@ -220,6 +271,8 @@ class GPTTrainer(BaseTTS):
             cond_mels=cond_mels,
             cond_idxs=cond_idxs,
             cond_lens=cond_lens,
+            emotion_ids=emotion_ids,
+            sample_weights=sample_weights,
         )
         return losses
 
@@ -237,6 +290,7 @@ class GPTTrainer(BaseTTS):
                     self.config,
                     s_info["speaker_wav"],
                     s_info["language"],
+                    emotion=s_info.get("emotion"),
                     gpt_cond_len=3,
                 )["wav"]
                 test_audios["{}-audio".format(idx)] = wav
@@ -261,6 +315,9 @@ class GPTTrainer(BaseTTS):
         batch["wav_lengths"] = batch["wav_lengths"]
         batch["text_inputs"] = batch["padded_text"]
         batch["cond_idxs"] = batch["cond_idxs"]
+        device = batch["text_lengths"].device
+        batch["emotion_id"] = batch["emotion_id"].to(device)
+        batch["emotion_weight"] = batch["emotion_weight"].to(device)
         # compute conditioning mel specs
         # transform waves from torch.Size([B, num_cond_samples, 1, T] to torch.Size([B * num_cond_samples, 1, T] because if is faster than iterate the tensor
         B, num_cond_samples, C, T = batch["conditioning"].size()
@@ -306,7 +363,15 @@ class GPTTrainer(BaseTTS):
         cond_lens = batch["cond_lens"]
 
         loss_text, loss_mel, _ = self.forward(
-            text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels, cond_idxs, cond_lens
+            text_inputs,
+            text_lengths,
+            audio_codes,
+            wav_lengths,
+            cond_mels,
+            cond_idxs,
+            cond_lens,
+            emotion_ids=batch["emotion_id"],
+            sample_weights=batch["emotion_weight"],
         )
         loss_dict["loss_text_ce"] = loss_text * self.args.gpt_loss_text_ce_weight
         loss_dict["loss_mel_ce"] = loss_mel * self.args.gpt_loss_mel_ce_weight
@@ -316,7 +381,29 @@ class GPTTrainer(BaseTTS):
     def eval_step(self, batch, criterion):
         # ignore masking for more consistent evaluation
         batch["cond_idxs"] = None
-        return self.train_step(batch, criterion)
+        loss_dict = {}
+        cond_mels = batch["cond_mels"]
+        text_inputs = batch["text_inputs"]
+        text_lengths = batch["text_lengths"]
+        audio_codes = batch["audio_codes"]
+        wav_lengths = batch["wav_lengths"]
+        cond_lens = batch["cond_lens"]
+
+        loss_text, loss_mel, _ = self.forward(
+            text_inputs,
+            text_lengths,
+            audio_codes,
+            wav_lengths,
+            cond_mels,
+            None,
+            cond_lens,
+            emotion_ids=batch["emotion_id"],
+            sample_weights=None,
+        )
+        loss_dict["loss_text_ce"] = loss_text * self.args.gpt_loss_text_ce_weight
+        loss_dict["loss_mel_ce"] = loss_mel * self.args.gpt_loss_mel_ce_weight
+        loss_dict["loss"] = loss_dict["loss_text_ce"] + loss_dict["loss_mel_ce"]
+        return {"model_outputs": None}, loss_dict
 
     def on_train_epoch_start(self, trainer):
         trainer.model.eval()  # the whole model to eval
@@ -325,6 +412,22 @@ class GPTTrainer(BaseTTS):
             trainer.model.module.xtts.gpt.train()
         else:
             trainer.model.xtts.gpt.train()
+
+        if not hasattr(self, "_warmup_epochs_seen"):
+            self._warmup_epochs_seen = 0
+
+        if self._warmup_active and not self._warmup_done:
+            if self._warmup_epochs_seen >= self.config.warmup_epochs:
+                self._unfreeze_all_parameters()
+                self._warmup_done = True
+                base_lr = self.config.lr
+                opt = getattr(trainer, "optimizer", None)
+                if opt is not None:
+                    for group in opt.param_groups:
+                        group["lr"] = base_lr
+                print(f" > Emotion warmup finished. Unfreezing GPT. LR set to {base_lr:.2e}")
+
+        self._warmup_epochs_seen += 1
 
     def on_init_end(self, trainer):  # pylint: disable=W0613
         # ignore similarities.pth on clearml save/upload
@@ -401,6 +504,7 @@ class GPTTrainer(BaseTTS):
     def get_optimizer(self) -> List:
         """Initiate and return the optimizer based on the config parameters."""
         # ToDo: deal with multi GPU training
+        target_lr = self._get_stage_learning_rate()
         if self.config.optimizer_wd_only_on_weights:
             # parameters to only GPT model
             net = self.xtts.gpt
@@ -448,7 +552,7 @@ class GPTTrainer(BaseTTS):
             opt = get_optimizer(
                 self.config.optimizer,
                 self.config.optimizer_params,
-                self.config.lr,
+                target_lr,
                 parameters=groups,
             )
             opt._group_names = [params_names_weights, params_names_notweights]
@@ -457,7 +561,7 @@ class GPTTrainer(BaseTTS):
         return get_optimizer(
             self.config.optimizer,
             self.config.optimizer_params,
-            self.config.lr,
+            target_lr,
             # optimize only for the GPT model
             parameters=self.xtts.gpt.parameters(),
         )

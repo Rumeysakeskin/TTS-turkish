@@ -606,7 +606,7 @@ def custom_turkish_formatter_emotion(root_path, meta_file, ignored_speakers=None
                     wav_file = parts[0]
                     text = parts[1]
                     speaker_id = parts[2]
-                    emotion = parts[3] if len(parts) > 3 else "neutral"
+                    emotion = parts[3].lower() if len(parts) > 3 else "neutral"
                     
                     # ignore speakers
                     if isinstance(ignored_speakers, list):
@@ -650,6 +650,7 @@ def custom_turkish_formatter_pseudo_speaker(root_path, meta_file, ignored_speake
                         "audio_file": wav_file,
                         "text": text,
                         "speaker_name": speaker_name,  # pseudo-speaker
+                        "emotion": emotion,
                         "language": "tr",
                         "root_path": root_path
                     })
@@ -668,7 +669,7 @@ def custom_turkish_formatter_emotion(root_path, meta_file, ignored_speakers=None
                     wav_file = parts[0]
                     text = parts[1]
                     speaker_id = parts[2]
-                    emotion = parts[3] if len(parts) > 3 else "neutral"
+                    emotion = parts[3].lower() if len(parts) > 3 else "neutral"
                     
                     # ignore speakers
                     if isinstance(ignored_speakers, list):

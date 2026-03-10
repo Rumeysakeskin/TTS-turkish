@@ -108,6 +108,9 @@ class GPT(nn.Module):
         label_smoothing=0.0,
         use_perceiver_resampler=False,
         perceiver_cond_length_compression=256,
+        num_emotions=0,
+        emotion_embedding_dim=None,
+        emotion_dropout_p=0.0,
     ):
         """
         Args:
@@ -138,6 +141,19 @@ class GPT(nn.Module):
         self.average_conditioning_embeddings = average_conditioning_embeddings
         self.use_perceiver_resampler = use_perceiver_resampler
         self.perceiver_cond_length_compression = perceiver_cond_length_compression
+        self.num_emotions = num_emotions
+        self.emotion_embedding_dim = emotion_embedding_dim or model_dim
+        self.emotion_dropout = nn.Dropout(emotion_dropout_p) if emotion_dropout_p > 0 else nn.Identity()
+
+        if num_emotions and num_emotions > 0:
+            self.emotion_embedding = nn.Embedding(num_emotions, self.emotion_embedding_dim)
+            if self.emotion_embedding_dim != model_dim:
+                self.emotion_projection = nn.Linear(self.emotion_embedding_dim, model_dim)
+            else:
+                self.emotion_projection = None
+        else:
+            self.emotion_embedding = None
+            self.emotion_projection = None
 
         self.text_embedding = nn.Embedding(self.number_text_tokens, model_dim)
         self.mel_embedding = nn.Embedding(self.num_audio_tokens, model_dim)
@@ -186,7 +202,7 @@ class GPT(nn.Module):
             self.prompt_pos_embedding = LearnedPositionEmbeddings(24 * 9, model_dim)
 
     def get_grad_norm_parameter_groups(self):
-        return {
+        param_groups = {
             "conditioning_encoder": list(self.conditioning_encoder.parameters()),
             "conditioning_perceiver": list(self.conditioning_perceiver.parameters())
             if self.use_perceiver_resampler
@@ -194,6 +210,33 @@ class GPT(nn.Module):
             "gpt": list(self.gpt.parameters()),
             "heads": list(self.text_head.parameters()) + list(self.mel_head.parameters()),
         }
+        if self.emotion_embedding is not None:
+            params = list(self.emotion_embedding.parameters())
+            if self.emotion_projection is not None:
+                params += list(self.emotion_projection.parameters())
+            param_groups["emotion_embedding"] = params
+        else:
+            param_groups["emotion_embedding"] = None
+        return param_groups
+
+    def apply_emotion_condition(self, cond_latents, emotion_ids, device):
+        if self.emotion_embedding is None:
+            return cond_latents
+        if emotion_ids is None:
+            raise ValueError("emotion_ids must be provided when emotion embeddings are enabled.")
+        if not torch.is_tensor(emotion_ids):
+            emotion_ids = torch.tensor(emotion_ids, dtype=torch.long, device=device)
+        else:
+            emotion_ids = emotion_ids.to(device)
+        if emotion_ids.dim() == 0:
+            emotion_ids = emotion_ids.unsqueeze(0)
+        if emotion_ids.shape[0] != cond_latents.shape[0]:
+            emotion_ids = emotion_ids.expand(cond_latents.shape[0])
+        emotion_latent = self.emotion_embedding(emotion_ids)
+        if self.emotion_projection is not None:
+            emotion_latent = self.emotion_projection(emotion_latent)
+        emotion_latent = self.emotion_dropout(emotion_latent)
+        return cond_latents + emotion_latent.unsqueeze(1)
 
     def init_gpt_for_inference(self, kv_cache=True, use_deepspeed=False):
         seq_length = self.max_prompt_tokens + self.max_mel_tokens + self.max_text_tokens + 1
@@ -377,6 +420,8 @@ class GPT(nn.Module):
         cond_idxs=None,
         cond_lens=None,
         cond_latents=None,
+        emotion_ids=None,
+        sample_weights=None,
         return_attentions=False,
         return_latent=False,
     ):
@@ -503,6 +548,8 @@ class GPT(nn.Module):
         if cond_latents is None:
             cond_latents = self.get_style_emb(cond_mels).transpose(1, 2)
 
+        cond_latents = self.apply_emotion_condition(cond_latents, emotion_ids, text_inputs.device)
+
         # Get logits
         sub = -5  # don't ask me why 😄
         if self.training:
@@ -546,13 +593,40 @@ class GPT(nn.Module):
             mel_targets[idx, cond_start:cond_end] = -1
 
         # Compute losses
-        loss_text = F.cross_entropy(
-            text_logits, text_targets.long(), ignore_index=-1, label_smoothing=self.label_smoothing
+        text_loss_tokens = F.cross_entropy(
+            text_logits,
+            text_targets.long(),
+            ignore_index=-1,
+            label_smoothing=self.label_smoothing,
+            reduction="none",
         )
-        loss_mel = F.cross_entropy(
-            mel_logits, mel_targets.long(), ignore_index=-1, label_smoothing=self.label_smoothing
+        mel_loss_tokens = F.cross_entropy(
+            mel_logits,
+            mel_targets.long(),
+            ignore_index=-1,
+            label_smoothing=self.label_smoothing,
+            reduction="none",
         )
-        return loss_text.mean(), loss_mel.mean(), mel_logits
+
+        valid_text_mask = (text_targets != -1).float()
+        valid_mel_mask = (mel_targets != -1).float()
+
+        text_token_counts = valid_text_mask.sum(dim=1).clamp(min=1.0)
+        mel_token_counts = valid_mel_mask.sum(dim=1).clamp(min=1.0)
+
+        loss_text_per_sample = (text_loss_tokens * valid_text_mask).sum(dim=1) / text_token_counts
+        loss_mel_per_sample = (mel_loss_tokens * valid_mel_mask).sum(dim=1) / mel_token_counts
+
+        if sample_weights is not None:
+            sample_weights = sample_weights.to(loss_text_per_sample.device)
+            weight_sum = torch.clamp(sample_weights.sum(), min=1e-6)
+            loss_text = (loss_text_per_sample * sample_weights).sum() / weight_sum
+            loss_mel = (loss_mel_per_sample * sample_weights).sum() / weight_sum
+        else:
+            loss_text = loss_text_per_sample.mean()
+            loss_mel = loss_mel_per_sample.mean()
+
+        return loss_text, loss_mel, mel_logits
 
     def inference(self, cond_latents, text_inputs, **hf_generate_kwargs):
         self.compute_embeddings(cond_latents, text_inputs)
@@ -562,7 +636,9 @@ class GPT(nn.Module):
         self,
         cond_latents,
         text_inputs,
+        emotion_ids=None,
     ):
+        cond_latents = self.apply_emotion_condition(cond_latents, emotion_ids, text_inputs.device)
         text_inputs = F.pad(text_inputs, (0, 1), value=self.stop_text_token)
         text_inputs = F.pad(text_inputs, (1, 0), value=self.start_text_token)
         emb = self.text_embedding(text_inputs) + self.text_pos_embedding(text_inputs)
@@ -584,9 +660,10 @@ class GPT(nn.Module):
         self,
         cond_latents,
         text_inputs,
+        emotion_ids=None,
         **hf_generate_kwargs,
     ):
-        gpt_inputs = self.compute_embeddings(cond_latents, text_inputs)
+        gpt_inputs = self.compute_embeddings(cond_latents, text_inputs, emotion_ids=emotion_ids)
         gen = self.gpt_inference.generate(
             gpt_inputs,
             bos_token_id=self.start_audio_token,
